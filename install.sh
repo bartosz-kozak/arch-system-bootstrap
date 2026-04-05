@@ -38,7 +38,6 @@ readonly PACMAN_PACKAGES=(
   libxinerama
   lolcat
   ly
-  neofetch
   neovim
   networkmanager
   nodejs
@@ -77,6 +76,7 @@ readonly PACMAN_PACKAGES=(
 )
 
 readonly AUR_PACKAGES=(
+  neofetch
   nordvpn-bin
   oh-my-posh-bin
   zen-browser-bin

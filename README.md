@@ -9,7 +9,7 @@ Bootstrap nowej maszyny Arch:
 - Miniforge3 instalowany lokalnie w `~/miniforge3`
 - konfigurację `tmux`, `lf`, `nvim` i `zsh`
 - podstawowe pakiety desktopowe, audio, Bluetooth i przeglądarki
-- narzędzia CLI, w tym `neofetch`, `cmatrix`, `lolcat`, `cowsay` i `sl`
+- narzędzia CLI, w tym `neofetch` z AUR oraz `cmatrix`, `lolcat`, `cowsay` i `sl`
 
 ## Wymagania
 
