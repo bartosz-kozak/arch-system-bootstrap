@@ -89,6 +89,7 @@ TARGET_WALLPAPER_RELATIVE_PATH="${TARGET_WALLPAPER_RELATIVE_PATH:-${DEFAULT_WALL
 WALLPAPER_URL="${WALLPAPER_URL:-${DEFAULT_WALLPAPER_URL}}"
 INSTALL_AUR_PACKAGES="${INSTALL_AUR_PACKAGES:-true}"
 CURRENT_STEP='inicjalizacja'
+LAST_RUN_COMMAND=''
 
 log() {
   printf '[INFO] %s\n' "$*"
@@ -103,10 +104,25 @@ die() {
   exit 1
 }
 
+format_command() {
+  local formatted=''
+  local arg
+
+  for arg in "$@"; do
+    printf -v formatted '%s%q ' "${formatted}" "${arg}"
+  done
+
+  printf '%s\n' "${formatted% }"
+}
+
 handle_error() {
   local exit_code="$1"
   local line_no="$2"
   local command_text="$3"
+
+  if [[ "${command_text}" == '"$@"' || -z "${command_text}" ]]; then
+    command_text="${LAST_RUN_COMMAND:-${command_text}}"
+  fi
 
   printf '[ERROR] Instalacja przerwana w kroku: %s\n' "${CURRENT_STEP}" >&2
   printf '[ERROR] Linia: %s\n' "${line_no}" >&2
@@ -124,6 +140,8 @@ trap cleanup EXIT
 trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 run_as_target_user() {
+  LAST_RUN_COMMAND="$(format_command "$@")"
+
   if [[ "${USER}" == "${TARGET_USER}" ]]; then
     "$@"
     return
@@ -213,7 +231,11 @@ install_miniforge() {
   installer_path="$(run_as_target_user mktemp)"
 
   log "Pobieram Miniforge3 z ${installer_url}."
-  run_as_target_user wget -q -O "${installer_path}" "${installer_url}"
+  run_as_target_user wget -O "${installer_path}" "${installer_url}"
+
+  if ! run_as_target_user grep -q 'Miniforge' "${installer_path}"; then
+    die "Pobrany plik instalatora Miniforge3 nie wygląda poprawnie: ${installer_path}"
+  fi
 
   log "Instaluję Miniforge3 w ${miniforge_dir}."
   run_as_target_user bash "${installer_path}" -b -p "${miniforge_dir}"
