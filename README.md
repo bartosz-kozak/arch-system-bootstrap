@@ -59,4 +59,5 @@ INSTALL_AUR_PACKAGES=true                   # ustaw na false, jeśli chcesz pomi
 
 - Na Archu instalator używa `dotfiles/zsh/arch/zshrc`
 - `fzf` jest instalowany przez `pacman`, a jego integracja z Zsh jest włączana przez `source <(fzf --zsh)` w `zsh/arch/zshrc`
-
+- Font Meslo jest instalowany jako `ttf-meslo-nerd`; pakiet `ttf-meslo-nerd-font-powerlevel10k` nie jest używany
+- Jeśli któryś krok instalacji się wywali, skrypt wypisze nazwę kroku, numer linii i polecenie, które zakończyło się błędem

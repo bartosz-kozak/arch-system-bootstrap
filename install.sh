@@ -61,7 +61,6 @@ readonly PACMAN_PACKAGES=(
   ttf-jetbrains-mono-nerd
   ttf-liberation
   ttf-meslo-nerd
-  ttf-meslo-nerd-font-powerlevel10k
   unzip
   webp-pixbuf-loader
   wget
@@ -89,6 +88,7 @@ TARGET_REPO_ROOT="${TARGET_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
 TARGET_WALLPAPER_RELATIVE_PATH="${TARGET_WALLPAPER_RELATIVE_PATH:-${DEFAULT_WALLPAPER_RELATIVE_PATH}}"
 WALLPAPER_URL="${WALLPAPER_URL:-${DEFAULT_WALLPAPER_URL}}"
 INSTALL_AUR_PACKAGES="${INSTALL_AUR_PACKAGES:-true}"
+CURRENT_STEP='inicjalizacja'
 
 log() {
   printf '[INFO] %s\n' "$*"
@@ -103,6 +103,17 @@ die() {
   exit 1
 }
 
+handle_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local command_text="$3"
+
+  printf '[ERROR] Instalacja przerwana w kroku: %s\n' "${CURRENT_STEP}" >&2
+  printf '[ERROR] Linia: %s\n' "${line_no}" >&2
+  printf '[ERROR] Polecenie: %s\n' "${command_text}" >&2
+  exit "${exit_code}"
+}
+
 cleanup() {
   if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
     kill "${SUDO_KEEPALIVE_PID}" >/dev/null 2>&1 || true
@@ -110,6 +121,7 @@ cleanup() {
 }
 
 trap cleanup EXIT
+trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 run_as_target_user() {
   if [[ "${USER}" == "${TARGET_USER}" ]]; then
@@ -228,11 +240,13 @@ prepare_sudo() {
 }
 
 install_pacman_packages() {
+  CURRENT_STEP='instalacja pakietow pacman'
   log 'Instaluję pakiety z oficjalnych repozytoriów.'
   sudo pacman -Syu --needed --noconfirm "${PACMAN_PACKAGES[@]}"
 }
 
 ensure_yay() {
+  CURRENT_STEP='instalacja yay'
   if command -v yay >/dev/null 2>&1; then
     log 'yay jest już dostępny.'
     return
@@ -250,6 +264,7 @@ ensure_yay() {
 }
 
 install_aur_packages() {
+  CURRENT_STEP='instalacja pakietow AUR'
   if [[ "${INSTALL_AUR_PACKAGES}" != "true" ]]; then
     warn 'Pomijam pakiety AUR, bo INSTALL_AUR_PACKAGES != true.'
     return
@@ -284,6 +299,7 @@ copy_tree() {
 }
 
 install_wallpaper() {
+  CURRENT_STEP='pobieranie tapety'
   local wallpaper_target="${TARGET_HOME}/${TARGET_WALLPAPER_RELATIVE_PATH}"
   local wallpaper_dir
   wallpaper_dir="$(dirname -- "${wallpaper_target}")"
@@ -304,6 +320,7 @@ install_wallpaper() {
 }
 
 install_user_files() {
+  CURRENT_STEP='instalacja plikow uzytkownika'
   local dotfiles_dir="${TARGET_REPO_ROOT}/dotfiles"
   local tmux_dir="${TARGET_HOME}/.config/tmux"
   local lf_dir="${TARGET_HOME}/.config/lf"
@@ -320,6 +337,7 @@ install_user_files() {
 }
 
 install_tmux_plugins() {
+  CURRENT_STEP='instalacja pluginow tmux'
   local plugin_root="${TARGET_HOME}/.config/tmux/plugins"
 
   log 'Instaluję TPM i pluginy tmux.'
@@ -333,6 +351,7 @@ install_tmux_plugins() {
 }
 
 install_suckless_tools() {
+  CURRENT_STEP='budowanie i instalacja suckless tools'
   local dwm_dir="${TARGET_REPO_ROOT}/dwm"
   local st_dir="${TARGET_REPO_ROOT}/st"
   local dmenu_dir="${TARGET_REPO_ROOT}/dmenu"
@@ -353,11 +372,13 @@ install_suckless_tools() {
 }
 
 install_dotfiles_repo() {
+  CURRENT_STEP='klonowanie dotfiles'
   local dotfiles_dir="${TARGET_REPO_ROOT}/dotfiles"
   ensure_repo "${DOTFILES_REPO_URL}" "${dotfiles_dir}"
 }
 
 configure_ly() {
+  CURRENT_STEP='konfiguracja ly'
   local config_file='/etc/ly/config.ini'
 
   log 'Konfiguruję ly zgodnie z obecną maszyną.'
@@ -371,12 +392,14 @@ configure_ly() {
 }
 
 configure_services() {
+  CURRENT_STEP='konfiguracja uslug systemowych'
   log 'Włączam podstawowe usługi systemowe.'
   sudo systemctl enable NetworkManager.service
   sudo systemctl enable bluetooth.service
 }
 
 configure_shell() {
+  CURRENT_STEP='konfiguracja powloki'
   local zsh_path
   zsh_path="$(command -v zsh)"
   log "Ustawiam ${zsh_path} jako domyślną powłokę dla ${TARGET_USER}."
@@ -384,14 +407,18 @@ configure_shell() {
 }
 
 main() {
+  CURRENT_STEP='walidacja srodowiska'
   ensure_supported_system
+  CURRENT_STEP='pobranie sudo'
   prepare_sudo
 
+  CURRENT_STEP='tworzenie katalogu repozytoriow'
   run_as_target_user mkdir -p -- "${TARGET_REPO_ROOT}"
 
   install_pacman_packages
   install_aur_packages
   install_dotfiles_repo
+  CURRENT_STEP='instalacja miniforge3'
   install_miniforge
   install_wallpaper
   install_user_files
