@@ -237,8 +237,10 @@ install_miniforge() {
     die "Pobrany plik instalatora Miniforge3 nie wygląda poprawnie: ${installer_path}"
   fi
 
+  run_as_target_user chmod +x "${installer_path}"
+
   log "Instaluję Miniforge3 w ${miniforge_dir}."
-  run_as_target_user bash "${installer_path}" -b -p "${miniforge_dir}"
+  run_as_target_user "${installer_path}" -b -p "${miniforge_dir}"
   run_as_target_user rm -f -- "${installer_path}"
 }
 
