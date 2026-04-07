@@ -75,6 +75,14 @@ readonly PACMAN_PACKAGES=(
   zsh-syntax-highlighting
 )
 
+readonly HYPRLAND_PACKAGES=(
+  hyprland
+  hyprpaper
+  kitty
+  waybar
+  xdg-desktop-portal-hyprland
+)
+
 readonly AUR_PACKAGES=(
   neofetch
   nordvpn-bin
@@ -88,6 +96,7 @@ TARGET_REPO_ROOT="${TARGET_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
 TARGET_WALLPAPER_RELATIVE_PATH="${TARGET_WALLPAPER_RELATIVE_PATH:-${DEFAULT_WALLPAPER_RELATIVE_PATH}}"
 WALLPAPER_URL="${WALLPAPER_URL:-${DEFAULT_WALLPAPER_URL}}"
 INSTALL_AUR_PACKAGES="${INSTALL_AUR_PACKAGES:-true}"
+WITH_HYPRLAND=false
 CURRENT_STEP='inicjalizacja'
 LAST_RUN_COMMAND=''
 
@@ -157,16 +166,30 @@ require_command() {
 
 build_wallpaper_candidates() {
   local input_url="$1"
+  local image_id
 
-  printf '%s\n' "${input_url}"
-
+  # imgur.com/ID  ->  generuj warianty bezpośrednie
   if [[ "${input_url}" =~ ^https?://imgur\.com/([A-Za-z0-9]+)$ ]]; then
-    local image_id="${BASH_REMATCH[1]}"
+    image_id="${BASH_REMATCH[1]}"
     printf 'https://i.imgur.com/%s.jpg\n' "${image_id}"
-    printf 'https://i.imgur.com/%s.jpeg\n' "${image_id}"
     printf 'https://i.imgur.com/%s.png\n' "${image_id}"
+    printf 'https://i.imgur.com/%s.jpeg\n' "${image_id}"
     printf 'https://i.imgur.com/%s.webp\n' "${image_id}"
+    return
   fi
+
+  # i.imgur.com/ID.ext  ->  próbuj też pozostałe rozszerzenia
+  if [[ "${input_url}" =~ ^https?://i\.imgur\.com/([A-Za-z0-9]+)(\.[a-zA-Z]+)?$ ]]; then
+    image_id="${BASH_REMATCH[1]}"
+    printf 'https://i.imgur.com/%s.jpg\n' "${image_id}"
+    printf 'https://i.imgur.com/%s.png\n' "${image_id}"
+    printf 'https://i.imgur.com/%s.jpeg\n' "${image_id}"
+    printf 'https://i.imgur.com/%s.webp\n' "${image_id}"
+    return
+  fi
+
+  # dowolny inny URL — próbuj tak jak podano
+  printf '%s\n' "${input_url}"
 }
 
 get_miniforge_arch() {
@@ -193,6 +216,7 @@ download_wallpaper() {
   local wallpaper_target="$1"
   local tmp_file
   local candidate
+  local mime
 
   tmp_file="$(run_as_target_user mktemp)"
 
@@ -200,10 +224,20 @@ download_wallpaper() {
     [[ -n "${candidate}" ]] || continue
     log "Próbuję pobrać tapetę z ${candidate}."
 
-    if run_as_target_user wget -q -O "${tmp_file}" "${candidate}" && run_as_target_user file --brief --mime-type -- "${tmp_file}" | grep -q '^image/'; then
-      run_as_target_user install -m 0644 "${tmp_file}" "${wallpaper_target}"
-      run_as_target_user rm -f -- "${tmp_file}"
-      return 0
+    if run_as_target_user curl -fsSL \
+        --user-agent 'Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0' \
+        --max-time 30 \
+        -o "${tmp_file}" \
+        "${candidate}"; then
+      mime="$(file --brief --mime-type -- "${tmp_file}")"
+      if [[ "${mime}" == image/* ]]; then
+        run_as_target_user install -m 0644 "${tmp_file}" "${wallpaper_target}"
+        run_as_target_user rm -f -- "${tmp_file}"
+        log "Tapeta pobrana pomyślnie (${mime})."
+        return 0
+      else
+        log "Pobrany plik nie jest obrazem (${mime}), próbuję następny URL."
+      fi
     fi
   done < <(build_wallpaper_candidates "${WALLPAPER_URL}")
 
@@ -264,7 +298,12 @@ prepare_sudo() {
 install_pacman_packages() {
   CURRENT_STEP='instalacja pakietow pacman'
   log 'Instaluję pakiety z oficjalnych repozytoriów.'
-  sudo pacman -Syu --needed --noconfirm "${PACMAN_PACKAGES[@]}"
+  local packages=("${PACMAN_PACKAGES[@]}")
+  if [[ "${WITH_HYPRLAND}" == 'true' ]]; then
+    log 'Dodaję pakiety Hyprland.'
+    packages+=("${HYPRLAND_PACKAGES[@]}")
+  fi
+  sudo pacman -Syu --needed --noconfirm "${packages[@]}"
 }
 
 ensure_yay() {
@@ -341,21 +380,104 @@ install_wallpaper() {
   warn "Nie ustawiono WALLPAPER_URL. .xinitrc będzie wskazywał na ${wallpaper_target}."
 }
 
+dotfiles_check_file() {
+  local src="$1"
+  local dst="$2"
+  local updated_ref="$3"
+  local up_to_date_ref="$4"
+  local mode="${5:-0644}"
+
+  if [[ ! -f "${src}" ]]; then
+    warn "Brak pliku źródłowego w dotfiles: ${src}. Pomijam."
+    return
+  fi
+
+  if [[ ! -f "${dst}" ]]; then
+    log "Instaluję nowy plik: ${dst}"
+    run_as_target_user mkdir -p -- "$(dirname -- "${dst}")"
+    run_as_target_user install -m "${mode}" "${src}" "${dst}"
+    printf -v "${updated_ref}" '%d' "$(( ${!updated_ref} + 1 ))"
+    return
+  fi
+
+  local src_hash dst_hash
+  src_hash="$(sha256sum "${src}" | cut -d' ' -f1)"
+  dst_hash="$(sha256sum "${dst}" | cut -d' ' -f1)"
+
+  if [[ "${src_hash}" != "${dst_hash}" ]]; then
+    log "Aktualizuję: ${dst}"
+    run_as_target_user install -m "${mode}" "${src}" "${dst}"
+    printf -v "${updated_ref}" '%d' "$(( ${!updated_ref} + 1 ))"
+  else
+    printf -v "${up_to_date_ref}" '%d' "$(( ${!up_to_date_ref} + 1 ))"
+  fi
+}
+
+dotfiles_check_dir() {
+  local src_dir="$1"
+  local dst_dir="$2"
+  local updated_ref="$3"
+  local up_to_date_ref="$4"
+
+  if [[ ! -d "${src_dir}" ]]; then
+    warn "Brak katalogu źródłowego w dotfiles: ${src_dir}. Pomijam."
+    return
+  fi
+
+  run_as_target_user mkdir -p -- "${dst_dir}"
+
+  local src_file rel_path dst_file
+  while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#${src_dir}/}"
+    dst_file="${dst_dir}/${rel_path}"
+    dotfiles_check_file "${src_file}" "${dst_file}" "${updated_ref}" "${up_to_date_ref}"
+  done < <(find "${src_dir}" -type f -print0 | sort -z)
+}
+
+check_and_update_dotfiles() {
+  CURRENT_STEP='sprawdzanie aktualnosci dotfiles'
+  local dotfiles_dir="${TARGET_REPO_ROOT}/dotfiles"
+  local updated=0
+  local up_to_date=0
+
+  [[ -d "${dotfiles_dir}" ]] || die "Nie znaleziono repozytorium dotfiles w ${dotfiles_dir}."
+
+  log "Sprawdzam aktualność dotfiles (porównanie SHA-256)."
+
+  dotfiles_check_file "${dotfiles_dir}/x11/xinitrc"      "${TARGET_HOME}/.xinitrc"        updated up_to_date 0755
+  dotfiles_check_file "${dotfiles_dir}/zsh/arch/zshrc"   "${TARGET_HOME}/.zshrc"          updated up_to_date
+  dotfiles_check_dir  "${dotfiles_dir}/tmux"             "${TARGET_HOME}/.config/tmux"    updated up_to_date
+  dotfiles_check_dir  "${dotfiles_dir}/lf"               "${TARGET_HOME}/.config/lf"      updated up_to_date
+  dotfiles_check_dir  "${dotfiles_dir}/nvim"             "${TARGET_HOME}/.config/nvim"    updated up_to_date
+
+  if [[ "${WITH_HYPRLAND}" == 'true' ]]; then
+    dotfiles_check_dir "${dotfiles_dir}/hypr"   "${TARGET_HOME}/.config/hypr"   updated up_to_date
+    dotfiles_check_dir "${dotfiles_dir}/kitty"  "${TARGET_HOME}/.config/kitty"  updated up_to_date
+    dotfiles_check_dir "${dotfiles_dir}/waybar" "${TARGET_HOME}/.config/waybar" updated up_to_date
+  fi
+
+  log "Dotfiles: ${updated} zaktualizowanych, ${up_to_date} aktualnych."
+}
+
 install_user_files() {
   CURRENT_STEP='instalacja plikow uzytkownika'
   local dotfiles_dir="${TARGET_REPO_ROOT}/dotfiles"
-  local tmux_dir="${TARGET_HOME}/.config/tmux"
-  local lf_dir="${TARGET_HOME}/.config/lf"
-  local nvim_dir="${TARGET_HOME}/.config/nvim"
 
   log 'Instaluję pliki użytkownika.'
   run_as_target_user mkdir -p -- "${TARGET_HOME}/.config"
-  run_as_target_user install -m 0644 "${dotfiles_dir}/x11/xinitrc" "${TARGET_HOME}/.xinitrc"
+  run_as_target_user install -m 0755 "${dotfiles_dir}/x11/xinitrc"    "${TARGET_HOME}/.xinitrc"
   run_as_target_user install -m 0644 "${dotfiles_dir}/zsh/arch/zshrc" "${TARGET_HOME}/.zshrc"
 
-  copy_tree "${dotfiles_dir}/tmux" "${tmux_dir}"
-  copy_tree "${dotfiles_dir}/lf" "${lf_dir}"
-  copy_tree "${dotfiles_dir}/nvim" "${nvim_dir}"
+  copy_tree "${dotfiles_dir}/tmux" "${TARGET_HOME}/.config/tmux"
+  copy_tree "${dotfiles_dir}/lf"   "${TARGET_HOME}/.config/lf"
+  copy_tree "${dotfiles_dir}/nvim" "${TARGET_HOME}/.config/nvim"
+
+  if [[ "${WITH_HYPRLAND}" == 'true' ]]; then
+    log 'Instaluję pliki konfiguracyjne Hyprland.'
+    copy_tree "${dotfiles_dir}/hypr"   "${TARGET_HOME}/.config/hypr"
+    copy_tree "${dotfiles_dir}/kitty"  "${TARGET_HOME}/.config/kitty"
+    copy_tree "${dotfiles_dir}/waybar" "${TARGET_HOME}/.config/waybar"
+  fi
 }
 
 install_tmux_plugins() {
@@ -429,6 +551,45 @@ configure_shell() {
 }
 
 main() {
+  local check_dotfiles_only=false
+  local download_wallpaper_only=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --with-hyprland)
+        WITH_HYPRLAND=true
+        shift
+        ;;
+      --check-dotfiles)
+        check_dotfiles_only=true
+        shift
+        ;;
+      --download-wallpaper)
+        download_wallpaper_only=true
+        shift
+        ;;
+      *)
+        die "Nieznana opcja: $1. Użycie: $0 [--with-hyprland] [--check-dotfiles|--download-wallpaper]"
+        ;;
+    esac
+  done
+
+  if [[ "${check_dotfiles_only}" == 'true' ]]; then
+    [[ -n "${SUDO_USER}" ]] && warn "Tryb --check-dotfiles nie wymaga sudo — uruchom jako zwykły użytkownik."
+    [[ -n "${TARGET_HOME}" ]] || die "Nie udało się ustalić katalogu domowego użytkownika ${TARGET_USER}."
+    check_and_update_dotfiles
+    log 'Sprawdzanie dotfiles zakończone.'
+    return
+  fi
+
+  if [[ "${download_wallpaper_only}" == 'true' ]]; then
+    [[ -n "${TARGET_HOME}" ]] || die "Nie udało się ustalić katalogu domowego użytkownika ${TARGET_USER}."
+    log "URL tapety: ${WALLPAPER_URL}"
+    log "Cel: ${TARGET_HOME}/${TARGET_WALLPAPER_RELATIVE_PATH}"
+    install_wallpaper
+    return
+  fi
+
   CURRENT_STEP='walidacja srodowiska'
   ensure_supported_system
   CURRENT_STEP='pobranie sudo'
